@@ -57,8 +57,9 @@ jobs:
                       "👉 Check now: https://tazkarti.com/#/matches"
                   )
                   print(f"ALERTED: count is now {count}")
-              else:
-                  print(f"No change. Still {count} matches.")
+           else:
+          print(f"No change. Still {count} matches.")
+         send_telegram(f"✅ Monitor working. Still {count} matches. No Zamalek vs Ahly yet.")
 
           except Exception as e:
               print(f"Error: {e}")
