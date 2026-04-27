@@ -13,7 +13,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python3 << 'EOF'
+          python3 << 'PYEOF'
           import requests, json, os
  
           BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
@@ -58,10 +58,9 @@ jobs:
                   )
                   print(f"ALERTED: count is now {count}")
               else:
-                  send_telegram(f"✅ Monitor working. Still {count} matches. No Zamalek vs Ahly yet.")
                   print(f"No change. Still {count} matches.")
  
           except Exception as e:
               print(f"Error: {e}")
-          EOF
+          PYEOF
  
