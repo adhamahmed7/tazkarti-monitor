@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Restore alert state
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: alert_state.json
           key: alert-state-v1
@@ -129,7 +129,7 @@ jobs:
           PYEOF
 
       - name: Save alert state
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: alert_state.json
           key: alert-state-v1
