@@ -23,11 +23,11 @@ jobs:
           python3 << 'PYEOF'
           import requests, json, os, time
 
-          BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
-          CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
+          BOT_TOKEN  = os.environ['TELEGRAM_BOT_TOKEN']
+          CHAT_ID    = os.environ['TELEGRAM_CHAT_ID']
           STATE_FILE = "alert_state.json"
           MAX_ALERTS = 3
-          WINDOW     = 600  # 10 minutes in seconds
+          WINDOW     = 600  # 10 minutes
 
           def send_telegram(msg):
               requests.post(
@@ -41,21 +41,22 @@ jobs:
                   with open(STATE_FILE) as f:
                       return json.load(f)
               except:
-                  return {"alerts": [], "last_count": 7}
+                  return {"zamalek_alerts": [], "count_alerts": [], "last_count": 7}
 
           def save_state(state):
               with open(STATE_FILE, "w") as f:
                   json.dump(state, f)
 
-          def can_alert(state):
+          def recent_alerts(state, key):
               now = time.time()
-              # Keep only alerts within the last 10 minutes
-              recent = [t for t in state["alerts"] if now - t < WINDOW]
-              state["alerts"] = recent
-              return len(recent) < MAX_ALERTS
+              state[key] = [t for t in state.get(key, []) if now - t < WINDOW]
+              return len(state[key])
 
-          def record_alert(state):
-              state["alerts"].append(time.time())
+          def can_alert(state, key):
+              return recent_alerts(state, key) < MAX_ALERTS
+
+          def record_alert(state, key):
+              state.setdefault(key, []).append(time.time())
 
           try:
               state = load_state()
@@ -69,32 +70,36 @@ jobs:
               matches = data if isinstance(data, list) else data.get("matches", data.get("data", []))
               count = len(matches)
 
-              # Check for ANY Zamalek match and its status
+              # --- ALERT 1: Count change (fires independently) ---
+              if count != state["last_count"] and can_alert(state, "count_alerts"):
+                  n = recent_alerts(state, "count_alerts") + 1
+                  send_telegram(
+                      f"⚡ <b>Tazkarti Updated!</b>\n\n"
+                      f"Matches: {state['last_count']} → {count}\n\n"
+                      f"👉 https://tazkarti.com/#/matches\n\n"
+                      f"<i>(Alert {n} of {MAX_ALERTS})</i>"
+                  )
+                  record_alert(state, "count_alerts")
+                  print(f"COUNT ALERT: {state['last_count']} -> {count}")
+
+              # --- ALERT 2: Zamalek matches (fires independently) ---
               zamalek_matches = []
               for m in matches:
                   text = json.dumps(m, ensure_ascii=False).lower()
                   if "zamalek" in text or "الزمالك" in text:
                       opponent = (
                           m.get("awayTeam") or m.get("away_team") or
-                          m.get("homeTeam") or m.get("home_team") or "Unknown"
+                          m.get("homeTeam") or m.get("home_team") or "?"
                       )
                       status = (
                           m.get("status") or m.get("ticketStatus") or
                           m.get("ticket_status") or m.get("matchStatus") or ""
                       )
                       date = m.get("date") or m.get("matchDate") or m.get("match_date") or ""
-                      zamalek_matches.append({
-                          "opponent": opponent,
-                          "status": status,
-                          "date": date,
-                          "raw": text[:200]
-                      })
+                      zamalek_matches.append({"opponent": opponent, "status": status, "date": date})
 
-              alerted = False
-
-              # Alert for Zamalek matches
-              if zamalek_matches and can_alert(state):
-                  remaining = MAX_ALERTS - len([t for t in state["alerts"] if time.time() - t < WINDOW])
+              if zamalek_matches and can_alert(state, "zamalek_alerts"):
+                  n = recent_alerts(state, "zamalek_alerts") + 1
                   details = ""
                   for zm in zamalek_matches:
                       details += f"\n🏟 Zamalek vs {zm['opponent']}"
@@ -105,30 +110,16 @@ jobs:
                       details += "\n"
 
                   send_telegram(
-                      "🚨 <b>ZAMALEK MATCH ALERT!</b> 🚨\n"
+                      f"🚨 <b>ZAMALEK MATCH ALERT!</b> 🚨\n"
                       f"{details}\n"
                       f"👉 <b>Book NOW:</b> https://tazkarti.com/#/matches\n\n"
-                      f"<i>(Alert {MAX_ALERTS - remaining + 1} of {MAX_ALERTS})</i>"
+                      f"<i>(Alert {n} of {MAX_ALERTS})</i>"
                   )
-                  record_alert(state)
-                  alerted = True
-                  print(f"ALERTED: Zamalek match found: {zamalek_matches}")
+                  record_alert(state, "zamalek_alerts")
+                  print(f"ZAMALEK ALERT: {zamalek_matches}")
 
-              # Alert for any new matches added
-              if not alerted and count != state["last_count"] and can_alert(state):
-                  remaining = MAX_ALERTS - len([t for t in state["alerts"] if time.time() - t < WINDOW])
-                  send_telegram(
-                      f"⚡ <b>Tazkarti Updated!</b>\n\n"
-                      f"Matches: {state['last_count']} → {count}\n\n"
-                      f"👉 https://tazkarti.com/#/matches\n\n"
-                      f"<i>(Alert {MAX_ALERTS - remaining + 1} of {MAX_ALERTS})</i>"
-                  )
-                  record_alert(state)
-                  alerted = True
-                  print(f"ALERTED: count changed {state['last_count']} -> {count}")
-
-              if not alerted:
-                  print(f"No alert. {count} matches. Zamalek matches: {len(zamalek_matches)}. Recent alerts: {len([t for t in state['alerts'] if time.time()-t < WINDOW])}/{MAX_ALERTS}")
+              if count == state["last_count"] and not zamalek_matches:
+                  print(f"No change. {count} matches.")
 
               state["last_count"] = count
               save_state(state)
