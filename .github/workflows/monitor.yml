@@ -122,6 +122,7 @@ jobs:
                   print(f"First run. Saved baseline: {count} matches.")
               elif count == last:
                   print(f"No change. Still {count} matches.")
+                  send_telegram(f"✅ Still {count} matches. No change.")
 
               state["last_count"] = count
               save_state(state)
