@@ -7,31 +7,27 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
+      - name: Restore alert state
+        uses: actions/cache@v4
+        with:
+          path: alert_state.json
+          key: alert-state-v2
+          restore-keys: alert-state-v2
+
       - name: Check Tazkarti
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python3 << 'PYEOF'
-          import requests, json, os, time, hashlib, base64
+          import requests, json, os, time
 
-          BOT_TOKEN   = os.environ['TELEGRAM_BOT_TOKEN']
-          CHAT_ID     = os.environ['TELEGRAM_CHAT_ID']
-          GH_TOKEN    = os.environ['GITHUB_TOKEN']
-          REPO        = os.environ['GITHUB_REPOSITORY']
-          MAX_ALERTS  = 3
-          WINDOW      = 600
-
-          GH_HEADERS  = {
-              "Authorization": f"token {GH_TOKEN}",
-              "Accept": "application/vnd.github.v3+json"
-          }
-          STATE_URL = f"https://api.github.com/repos/{REPO}/contents/state.json"
+          BOT_TOKEN  = os.environ['TELEGRAM_BOT_TOKEN']
+          CHAT_ID    = os.environ['TELEGRAM_CHAT_ID']
+          STATE_FILE = "alert_state.json"
+          MAX_ALERTS = 3
+          WINDOW     = 600
 
           def send_telegram(msg):
               requests.post(
@@ -41,19 +37,15 @@ jobs:
               )
 
           def load_state():
-              r = requests.get(STATE_URL, headers=GH_HEADERS, timeout=10)
-              if r.status_code == 200:
-                  data = r.json()
-                  content = json.loads(base64.b64decode(data["content"]).decode())
-                  return content, data["sha"]
-              return {"last_hash": "", "change_alerts": [], "zamalek_alerts": []}, None
+              try:
+                  with open(STATE_FILE) as f:
+                      return json.load(f)
+              except:
+                  return {"last_count": 0, "change_alerts": [], "zamalek_alerts": []}
 
-          def save_state(state, sha):
-              encoded = base64.b64encode(json.dumps(state).encode()).decode()
-              payload = {"message": "update state", "content": encoded}
-              if sha:
-                  payload["sha"] = sha
-              requests.put(STATE_URL, headers=GH_HEADERS, json=payload, timeout=10)
+          def save_state(state):
+              with open(STATE_FILE, "w") as f:
+                  json.dump(state, f)
 
           def prune(state, key):
               now = time.time()
@@ -67,31 +59,29 @@ jobs:
               state.setdefault(key, []).append(time.time())
 
           try:
-              state, sha = load_state()
+              state = load_state()
 
               r = requests.get(
                   "https://tazkarti.com/data/matches-list-json.json",
                   headers={"User-Agent": "Mozilla/5.0", "Referer": "https://tazkarti.com/"},
                   timeout=15
               )
-              raw     = r.text
               data    = r.json()
               matches = data if isinstance(data, list) else data.get("matches", data.get("data", []))
+              count   = len(matches)
+              last    = state.get("last_count", 0)
 
-              current_hash = hashlib.md5(raw.encode()).hexdigest()
-              last_hash    = state.get("last_hash", "")
-
-              # --- ALERT 1: Any change in JSON ---
-              if last_hash and current_hash != last_hash and can_alert(state, "change_alerts"):
+              # --- ALERT 1: Count changed (ignore first run where last=0) ---
+              if last != 0 and count != last and can_alert(state, "change_alerts"):
                   n = prune(state, "change_alerts") + 1
                   send_telegram(
-                      "⚡ <b>Tazkarti page changed!</b>\n\n"
-                      "Something updated on the matches page.\n\n"
-                      "👉 <b>Check NOW:</b> https://tazkarti.com/#/matches\n\n"
+                      f"⚡ <b>Tazkarti Updated!</b>\n\n"
+                      f"Matches: {last} → {count}\n\n"
+                      f"👉 <b>Check NOW:</b> https://tazkarti.com/#/matches\n\n"
                       f"<i>(Alert {n} of {MAX_ALERTS})</i>"
                   )
                   record(state, "change_alerts")
-                  print(f"CHANGE ALERT sent.")
+                  print(f"CHANGE ALERT: {last} -> {count}")
 
               # --- ALERT 2: Any Zamalek match ---
               zamalek_matches = []
@@ -128,14 +118,20 @@ jobs:
                   record(state, "zamalek_alerts")
                   print(f"ZAMALEK ALERT sent.")
 
-              if not last_hash:
-                  print("First run — saving snapshot.")
-              elif current_hash == last_hash:
-                  print("No change.")
+              if last == 0:
+                  print(f"First run. Saved baseline: {count} matches.")
+              elif count == last:
+                  print(f"No change. Still {count} matches.")
 
-              state["last_hash"] = current_hash
-              save_state(state, sha)
+              state["last_count"] = count
+              save_state(state)
 
           except Exception as e:
               print(f"Error: {e}")
           PYEOF
+
+      - name: Save alert state
+        uses: actions/cache@v4
+        with:
+          path: alert_state.json
+          key: alert-state-v2
