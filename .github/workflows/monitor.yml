@@ -21,7 +21,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python3 << 'PYEOF'
-          import requests, json, os, time
+          import requests, json, os, time, hashlib
 
           BOT_TOKEN  = os.environ['TELEGRAM_BOT_TOKEN']
           CHAT_ID    = os.environ['TELEGRAM_CHAT_ID']
@@ -41,21 +41,21 @@ jobs:
                   with open(STATE_FILE) as f:
                       return json.load(f)
               except:
-                  return {"zamalek_alerts": [], "count_alerts": [], "last_count": 7}
+                  return {"last_hash": "", "change_alerts": [], "zamalek_alerts": []}
 
           def save_state(state):
               with open(STATE_FILE, "w") as f:
                   json.dump(state, f)
 
-          def recent_alerts(state, key):
+          def prune(state, key):
               now = time.time()
               state[key] = [t for t in state.get(key, []) if now - t < WINDOW]
               return len(state[key])
 
           def can_alert(state, key):
-              return recent_alerts(state, key) < MAX_ALERTS
+              return prune(state, key) < MAX_ALERTS
 
-          def record_alert(state, key):
+          def record(state, key):
               state.setdefault(key, []).append(time.time())
 
           try:
@@ -66,23 +66,27 @@ jobs:
                   headers={"User-Agent": "Mozilla/5.0", "Referer": "https://tazkarti.com/"},
                   timeout=15
               )
+              raw  = r.text
               data = r.json()
               matches = data if isinstance(data, list) else data.get("matches", data.get("data", []))
-              count = len(matches)
 
-              # --- ALERT 1: Count change (fires independently) ---
-              if count != state["last_count"] and can_alert(state, "count_alerts"):
-                  n = recent_alerts(state, "count_alerts") + 1
+              # Hash the full JSON to detect ANY change
+              current_hash = hashlib.md5(raw.encode()).hexdigest()
+              last_hash    = state.get("last_hash", "")
+
+              # --- ALERT 1: Any change in the JSON ---
+              if last_hash and current_hash != last_hash and can_alert(state, "change_alerts"):
+                  n = prune(state, "change_alerts") + 1
                   send_telegram(
-                      f"⚡ <b>Tazkarti Updated!</b>\n\n"
-                      f"Matches: {state['last_count']} → {count}\n\n"
-                      f"👉 https://tazkarti.com/#/matches\n\n"
+                      "⚡ <b>Tazkarti page changed!</b>\n\n"
+                      "Something updated on the matches page.\n\n"
+                      "👉 <b>Check NOW:</b> https://tazkarti.com/#/matches\n\n"
                       f"<i>(Alert {n} of {MAX_ALERTS})</i>"
                   )
-                  record_alert(state, "count_alerts")
-                  print(f"COUNT ALERT: {state['last_count']} -> {count}")
+                  record(state, "change_alerts")
+                  print(f"CHANGE ALERT sent. Hash: {last_hash[:8]} -> {current_hash[:8]}")
 
-              # --- ALERT 2: Zamalek matches (fires independently) ---
+              # --- ALERT 2: Any Zamalek match ---
               zamalek_matches = []
               for m in matches:
                   text = json.dumps(m, ensure_ascii=False).lower()
@@ -99,7 +103,7 @@ jobs:
                       zamalek_matches.append({"opponent": opponent, "status": status, "date": date})
 
               if zamalek_matches and can_alert(state, "zamalek_alerts"):
-                  n = recent_alerts(state, "zamalek_alerts") + 1
+                  n = prune(state, "zamalek_alerts") + 1
                   details = ""
                   for zm in zamalek_matches:
                       details += f"\n🏟 Zamalek vs {zm['opponent']}"
@@ -115,13 +119,15 @@ jobs:
                       f"👉 <b>Book NOW:</b> https://tazkarti.com/#/matches\n\n"
                       f"<i>(Alert {n} of {MAX_ALERTS})</i>"
                   )
-                  record_alert(state, "zamalek_alerts")
-                  print(f"ZAMALEK ALERT: {zamalek_matches}")
+                  record(state, "zamalek_alerts")
+                  print(f"ZAMALEK ALERT sent.")
 
-              if count == state["last_count"] and not zamalek_matches:
-                  print(f"No change. {count} matches.")
+              if not last_hash:
+                  print("First run — saving initial snapshot.")
+              elif current_hash == last_hash:
+                  print("No change detected.")
 
-              state["last_count"] = count
+              state["last_hash"] = current_hash
               save_state(state)
 
           except Exception as e:
